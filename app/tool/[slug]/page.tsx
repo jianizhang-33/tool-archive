@@ -1,4 +1,5 @@
 import { supabase } from "@/lib/supabase";
+import { formatYear, normalizeVideoUrls, ToolRecord } from "@/lib/tool-utils";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 
@@ -10,19 +11,6 @@ type PageProps = {
   }>;
 };
 
-function formatYear(year: number) {
-  return year < 0 ? `${Math.abs(year)} BC` : `${year} AD`;
-}
-
-function toEmbedUrl(url: string) {
-  if (!url) return "";
-  if (url.includes("youtube.com/embed/")) return url;
-  if (url.includes("watch?v=")) return url.replace("watch?v=", "embed/");
-  const match = url.match(/youtu\.be\/([a-zA-Z0-9_-]+)/);
-  if (match) return `https://www.youtube.com/embed/${match[1]}`;
-  return url;
-}
-
 export default async function ToolPage({ params }: PageProps) {
   const { slug } = await params;
 
@@ -30,13 +18,11 @@ export default async function ToolPage({ params }: PageProps) {
     .from("tools")
     .select("*")
     .eq("slug", slug)
-    .single();
+    .single<ToolRecord>();
 
-  if (error || !tool) {
-    notFound();
-  }
+  if (error || !tool) notFound();
 
-  const videoSrc = tool.video_url ? toEmbedUrl(tool.video_url) : "";
+  const videos = normalizeVideoUrls(tool);
 
   return (
     <main
@@ -47,17 +33,17 @@ export default async function ToolPage({ params }: PageProps) {
         backgroundSize: "42px 42px",
       }}
     >
-      <div className="mx-auto max-w-5xl px-5 pb-20 pt-8 md:px-8">
+      <div className="mx-auto max-w-6xl px-4 pb-20 pt-6 md:px-8">
         <Link
           href="/"
-          className="inline-flex items-center gap-2 rounded-full bg-white/30 px-4 py-2 text-sm font-medium text-slate-700 shadow-lg backdrop-blur-md ring-1 ring-black/5 transition hover:bg-white/45"
+          className="inline-flex items-center gap-2 rounded-full bg-white/15 px-4 py-2 text-sm font-medium text-slate-700 shadow-lg backdrop-blur-md ring-1 ring-black/5 transition hover:bg-white/25"
         >
           ← Back to timeline
         </Link>
 
-        <div className="mt-8 rounded-[32px] bg-white/25 p-6 shadow-xl backdrop-blur-md ring-1 ring-black/5 md:p-8">
-          <div className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
-            <div>
+        <section className="mt-6 rounded-[32px] bg-white/20 p-5 shadow-xl backdrop-blur-md ring-1 ring-black/5 md:p-8">
+          <div className="flex flex-col gap-5 md:flex-row md:items-end md:justify-between">
+            <div className="max-w-3xl">
               <div className="mb-3 inline-flex rounded-full bg-slate-900/5 px-3 py-1 text-xs font-semibold uppercase tracking-[0.2em] text-slate-600">
                 {tool.group_name || "Tool"}
               </div>
@@ -78,10 +64,9 @@ export default async function ToolPage({ params }: PageProps) {
               />
             </div>
           </div>
-        </div>
+        </section>
 
-        {/* Drawing */}
-        <section className="mt-8 rounded-[32px] bg-white/55 p-5 shadow-xl backdrop-blur-md ring-1 ring-black/5 md:p-8">
+        <section className="mt-8 rounded-[32px] bg-white/25 p-5 shadow-xl backdrop-blur-md ring-1 ring-black/5 md:p-8">
           <h2 className="text-2xl font-semibold text-slate-900">Drawing</h2>
           <p className="mt-2 text-slate-600">
             Technical drawing / logic drawing for the tool.
@@ -96,8 +81,7 @@ export default async function ToolPage({ params }: PageProps) {
           </div>
         </section>
 
-        {/* Information */}
-        <section className="mt-8 rounded-[32px] bg-white/55 p-5 shadow-xl backdrop-blur-md ring-1 ring-black/5 md:p-8">
+        <section className="mt-8 rounded-[32px] bg-white/25 p-5 shadow-xl backdrop-blur-md ring-1 ring-black/5 md:p-8">
           <h2 className="text-2xl font-semibold text-slate-900">Information</h2>
 
           <div className="mt-6 grid gap-6 md:grid-cols-[1.4fr_0.6fr]">
@@ -137,28 +121,39 @@ export default async function ToolPage({ params }: PageProps) {
           </div>
         </section>
 
-        {/* Video */}
-        <section className="mt-8 rounded-[32px] bg-white/55 p-5 shadow-xl backdrop-blur-md ring-1 ring-black/5 md:p-8">
-          <h2 className="text-2xl font-semibold text-slate-900">Using Video</h2>
+        <section className="mt-8 rounded-[32px] bg-white/25 p-5 shadow-xl backdrop-blur-md ring-1 ring-black/5 md:p-8">
+          <h2 className="text-2xl font-semibold text-slate-900">
+            Using Videos{videos.length ? ` (${videos.length})` : ""}
+          </h2>
           <p className="mt-2 text-slate-600">
-            Demonstration video for how the tool is used.
+            One tool can have one or multiple videos.
           </p>
 
-          <div className="mt-6 overflow-hidden rounded-[28px] bg-black shadow-lg ring-1 ring-black/5">
-            {videoSrc ? (
-              <iframe
-                src={videoSrc}
-                className="aspect-video w-full"
-                title={`${tool.name} video`}
-                allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
-                allowFullScreen
-              />
-            ) : (
-              <div className="flex aspect-video w-full items-center justify-center bg-white/5 text-slate-300">
-                No video uploaded yet.
-              </div>
-            )}
-          </div>
+          {videos.length > 0 ? (
+            <div className={`mt-6 grid gap-5 ${videos.length > 1 ? "md:grid-cols-2" : "grid-cols-1"}`}>
+              {videos.map((src, index) => (
+                <div
+                  key={`${src}-${index}`}
+                  className="overflow-hidden rounded-[24px] bg-black shadow-lg ring-1 ring-black/5"
+                >
+                  <div className="bg-black px-4 py-2 text-sm text-white/80">
+                    Video {index + 1}
+                  </div>
+                  <iframe
+                    src={src}
+                    className="aspect-video w-full"
+                    title={`${tool.name} video ${index + 1}`}
+                    allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+                    allowFullScreen
+                  />
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="mt-6 rounded-[24px] bg-white/70 p-6 text-slate-600 ring-1 ring-black/5">
+              No video uploaded yet.
+            </div>
+          )}
         </section>
       </div>
     </main>

@@ -2,30 +2,12 @@
 
 import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
-
-type Tool = {
-  id: string;
-  slug: string;
-  name: string;
-  year: number;
-  group_name?: string;
-  color?: string;
-  description?: string;
-  img_url?: string;
-};
-
-const LEGEND = [
-  { name: "Wool", color: "#5A8DDE" },
-  { name: "Clay", color: "#E56B63" },
-  { name: "Willow", color: "#E9A04B" },
-  { name: "Reed", color: "#58B96B" },
-  { name: "Straw", color: "#E8C84A" },
-  { name: "Pine", color: "#6747D8" },
-];
-
-function formatYear(year: number) {
-  return year < 0 ? `${Math.abs(year)} BC` : `${year} AD`;
-}
+import {
+  formatYear,
+  getMaterialOptions,
+  toolMatchesQuery,
+  ToolRecord,
+} from "@/lib/tool-utils";
 
 function clamp(value: number, min: number, max: number) {
   return Math.min(max, Math.max(min, value));
@@ -42,7 +24,43 @@ function getMidpoint(t1: Touch, t2: Touch) {
   };
 }
 
-export default function Timeline({ tools }: { tools: Tool[] }) {
+function niceStep(rawStep: number) {
+  if (!Number.isFinite(rawStep) || rawStep <= 0) return 1;
+
+  const exponent = Math.floor(Math.log10(rawStep));
+  const fraction = rawStep / Math.pow(10, exponent);
+
+  let niceFraction = 1;
+  if (fraction <= 1) niceFraction = 1;
+  else if (fraction <= 2) niceFraction = 2;
+  else if (fraction <= 5) niceFraction = 5;
+  else niceFraction = 10;
+
+  return niceFraction * Math.pow(10, exponent);
+}
+
+function buildTicks(minYear: number, maxYear: number, desiredCount: number) {
+  const range = Math.max(maxYear - minYear, 1);
+  const step = niceStep(range / desiredCount);
+  const start = Math.ceil(minYear / step) * step;
+
+  const ticks: number[] = [];
+  for (let y = start; y <= maxYear; y += step) {
+    ticks.push(Math.round(y));
+  }
+
+  if (minYear < 0 && maxYear > 0 && !ticks.includes(0)) {
+    ticks.push(0);
+  }
+
+  return Array.from(new Set(ticks)).sort((a, b) => a - b);
+}
+
+function formatShortYear(year: number) {
+  return year < 0 ? `${Math.abs(year)} BC` : `${year} AD`;
+}
+
+export default function Timeline({ tools }: { tools: ToolRecord[] }) {
   const scrollRef = useRef<HTMLDivElement>(null);
 
   const zoomRef = useRef(1);
@@ -53,19 +71,41 @@ export default function Timeline({ tools }: { tools: Tool[] }) {
   const [viewport, setViewport] = useState({ width: 0, height: 0 });
   const [zoom, setZoom] = useState(1);
 
+  const [search, setSearch] = useState("");
+  const [activeMaterial, setActiveMaterial] = useState("All");
+
   const sorted = useMemo(
     () => [...tools].sort((a, b) => a.year - b.year),
     [tools]
   );
 
-  const minYear = useMemo(
-    () => Math.min(...sorted.map((t) => t.year)),
-    [sorted]
-  );
-  const maxYear = useMemo(
-    () => Math.max(...sorted.map((t) => t.year)),
-    [sorted]
-  );
+  const materials = useMemo(() => getMaterialOptions(sorted), [sorted]);
+
+  const filteredForFocus = useMemo(() => {
+    return sorted.filter((tool) => {
+      const materialOK =
+        activeMaterial === "All" || tool.group_name === activeMaterial;
+      const searchOK = !search.trim() || toolMatchesQuery(tool, search);
+      return materialOK && searchOK;
+    });
+  }, [sorted, search, activeMaterial]);
+
+  const focusTool = useMemo(() => {
+    if (filteredForFocus.length === 0) return null;
+    if (search.trim()) return filteredForFocus[0];
+    if (activeMaterial !== "All") return filteredForFocus[0];
+    return null;
+  }, [filteredForFocus, search, activeMaterial]);
+
+  const minYear = useMemo(() => {
+    if (sorted.length === 0) return 0;
+    return Math.min(...sorted.map((t) => t.year));
+  }, [sorted]);
+
+  const maxYear = useMemo(() => {
+    if (sorted.length === 0) return 0;
+    return Math.max(...sorted.map((t) => t.year));
+  }, [sorted]);
 
   useEffect(() => {
     zoomRef.current = zoom;
@@ -87,7 +127,7 @@ export default function Timeline({ tools }: { tools: Tool[] }) {
   const isMobile = viewport.width > 0 ? viewport.width < 768 : false;
 
   const topPad = isMobile
-    ? Math.max(viewport.height * 0.18, 140)
+    ? Math.max(viewport.height * 0.18, 150)
     : Math.max(viewport.height * 0.16, 130);
 
   const bottomPad = isMobile
@@ -122,20 +162,12 @@ export default function Timeline({ tools }: { tools: Tool[] }) {
   }
 
   const ticks = useMemo(() => {
-    if (sorted.length === 0) return [];
-    const steps = isMobile ? 5 : 7;
-
-    return Array.from({ length: steps + 1 }, (_, i) => {
-      const rawYear = minYear + ((maxYear - minYear) * i) / steps;
-      const year = Math.round(rawYear / 1000) * 1000;
-      return {
-        year,
-        x: getX(rawYear),
-      };
-    }).filter((tick, index, arr) => {
-      return arr.findIndex((t) => t.year === tick.year) === index;
-    });
-  }, [isMobile, minYear, maxYear, sorted.length]);
+    const desiredCount = isMobile ? 4 : 6;
+    return buildTicks(minYear, maxYear, desiredCount).map((year) => ({
+      year,
+      x: getX(year),
+    }));
+  }, [isMobile, minYear, maxYear]);
 
   function applyZoom(nextZoom: number, clientX: number, clientY: number) {
     const container = scrollRef.current;
@@ -163,6 +195,36 @@ export default function Timeline({ tools }: { tools: Tool[] }) {
     setZoom(clampedZoom);
   }
 
+  function centerOnFocusTool() {
+    const container = scrollRef.current;
+    if (!container || !focusTool || !viewport.width || !viewport.height) return;
+
+    const idx = sorted.findIndex((tool) => tool.id === focusTool.id);
+    const toolX = getX(focusTool.year) / 100;
+    const scaledWidth = stageWidth * zoomRef.current;
+    const scaledHeight = stageHeight * zoomRef.current;
+
+    const isTopSide = idx % 2 === 0;
+    const cardYOffset = isTopSide
+      ? (timelineY - (connectorLength + 330)) * zoomRef.current
+      : (timelineY + connectorLength + 42) * zoomRef.current;
+
+    const targetScrollLeft = clamp(
+      toolX * scaledWidth - container.clientWidth / 2,
+      0,
+      Math.max(scaledWidth - container.clientWidth, 0)
+    );
+
+    const targetScrollTop = clamp(
+      cardYOffset - container.clientHeight / 2 + 100,
+      0,
+      Math.max(scaledHeight - container.clientHeight, 0)
+    );
+
+    container.scrollLeft = targetScrollLeft;
+    container.scrollTop = targetScrollTop;
+  }
+
   useEffect(() => {
     const container = scrollRef.current;
     if (!container || !viewport.width || !viewport.height) return;
@@ -183,6 +245,11 @@ export default function Timeline({ tools }: { tools: Tool[] }) {
 
     return () => window.clearTimeout(timer);
   }, [viewport.width, viewport.height, timelineY, stageWidth, stageHeight]);
+
+  useEffect(() => {
+    centerOnFocusTool();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [search, activeMaterial, viewport.width, viewport.height]);
 
   useEffect(() => {
     const container = scrollRef.current;
@@ -243,6 +310,10 @@ export default function Timeline({ tools }: { tools: Tool[] }) {
     };
   }, []);
 
+  const searchCount = search.trim()
+    ? sorted.filter((tool) => toolMatchesQuery(tool, search)).length
+    : sorted.length;
+
   return (
     <div
       ref={scrollRef}
@@ -255,6 +326,59 @@ export default function Timeline({ tools }: { tools: Tool[] }) {
         touchAction: "pan-x pan-y",
       }}
     >
+      {/* fixed left-top control card */}
+      <div className="fixed left-3 top-3 z-50 w-[calc(100vw-1.5rem)] max-w-[520px] rounded-3xl bg-white/20 p-4 shadow-xl backdrop-blur-md ring-1 ring-black/5 md:left-5 md:top-5">
+        <h1 className="text-3xl font-bold tracking-tight text-slate-800 md:text-4xl">
+          Tool Archive
+        </h1>
+        <p className="mt-1 text-sm text-slate-600">
+          Interactive timeline archive
+        </p>
+
+        <div className="mt-4 space-y-3">
+          <input
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Search tools, descriptions, years..."
+            className="w-full rounded-full border border-white/40 bg-white/75 px-4 py-3 text-sm text-slate-800 outline-none placeholder:text-slate-400 focus:border-slate-400"
+          />
+
+          <div className="flex flex-wrap gap-2">
+            {materials.map((item) => {
+              const isActive = activeMaterial === item.name;
+              return (
+                <button
+                  key={item.name}
+                  type="button"
+                  onClick={() => setActiveMaterial(item.name)}
+                  className={`rounded-full px-3 py-2 text-sm font-medium transition ${
+                    isActive
+                      ? "bg-slate-900 text-white"
+                      : "bg-white/60 text-slate-700 hover:bg-white/85"
+                  }`}
+                  style={
+                    isActive && item.color
+                      ? { boxShadow: `0 0 0 2px ${item.color} inset` }
+                      : undefined
+                  }
+                >
+                  {item.name}
+                </button>
+              );
+            })}
+          </div>
+
+          <div className="flex flex-col gap-2 text-xs text-slate-500 md:flex-row md:items-center md:justify-between">
+            <span>{searchCount} tools matched</span>
+            <div className="flex items-center gap-2">
+              <span>Ctrl + wheel on desktop</span>
+              <span>·</span>
+              <span>pinch on mobile</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
       <div
         style={{
           width: stageWidth * zoom,
@@ -278,12 +402,12 @@ export default function Timeline({ tools }: { tools: Tool[] }) {
               className="pointer-events-none absolute z-20 -translate-x-1/2 text-center"
               style={{
                 left: `${tick.x}%`,
-                top: timelineY + 25,
-                width: 90,
+                top: timelineY - (isMobile ? 82 : 96),
+                width: isMobile ? 96 : 110,
               }}
             >
-              <div className="text-sm font-medium text-slate-500">
-                {formatYear(tick.year)}
+              <div className="text-sm font-medium whitespace-nowrap text-slate-500">
+                {formatShortYear(tick.year)}
               </div>
             </div>
           ))}
@@ -302,6 +426,17 @@ export default function Timeline({ tools }: { tools: Tool[] }) {
             const x = getX(tool.year);
             const accent = tool.color || "#E56B63";
 
+            const searchMatch = !search.trim() || toolMatchesQuery(tool, search);
+            const materialMatch =
+              activeMaterial === "All" || tool.group_name === activeMaterial;
+
+            const isFocused =
+              focusTool?.id === tool.id && (search.trim() || activeMaterial !== "All");
+
+            const faded =
+              (!search.trim() || searchMatch ? 1 : 0.26) *
+              (activeMaterial === "All" || materialMatch ? 1 : 0.26);
+
             return (
               <div
                 key={tool.id}
@@ -311,10 +446,14 @@ export default function Timeline({ tools }: { tools: Tool[] }) {
                   top: timelineY,
                   transform: "translateX(-50%)",
                   width: cardWidth,
+                  opacity: faded,
+                  transition: "opacity 180ms ease, transform 180ms ease",
                 }}
               >
                 <div
-                  className="absolute z-30 rounded-full border-[5px] bg-white shadow-sm"
+                  className={`absolute z-30 rounded-full border-[5px] bg-white shadow-sm ${
+                    isFocused ? "shadow-lg" : ""
+                  }`}
                   style={{
                     left: "50%",
                     top: -13,
@@ -322,6 +461,7 @@ export default function Timeline({ tools }: { tools: Tool[] }) {
                     height: 26,
                     transform: "translateX(-50%)",
                     borderColor: accent,
+                    boxShadow: isFocused ? `0 0 0 8px ${accent}22` : undefined,
                   }}
                 />
 
@@ -336,10 +476,11 @@ export default function Timeline({ tools }: { tools: Tool[] }) {
 
                 <Link
                   href={`/tool/${tool.slug}`}
-                  className="absolute left-1/2 -translate-x-1/2"
+                  className={`absolute left-1/2 -translate-x-1/2 ${isFocused ? "scale-[1.01]" : ""}`}
                   style={{
                     width: cardWidth,
                     top: topSide ? -(connectorLength + 330) : connectorLength + 42,
+                    transition: "transform 180ms ease",
                   }}
                 >
                   <div className="group text-center">
@@ -394,20 +535,23 @@ export default function Timeline({ tools }: { tools: Tool[] }) {
         </div>
       </div>
 
-      <div className="fixed bottom-5 left-5 z-50 rounded-2xl bg-white/20 p-4 shadow-lg backdrop-blur-md ring-1 ring-black/5">
+      {/* fixed legend */}
+      <div className="fixed bottom-3 left-3 z-50 rounded-2xl bg-white/20 p-4 shadow-lg backdrop-blur-md ring-1 ring-black/5 md:bottom-5 md:left-5">
         <div className="mb-3 text-sm font-bold tracking-wide text-slate-800">
           Legend
         </div>
         <div className="space-y-2">
-          {LEGEND.map((item) => (
-            <div key={item.name} className="flex items-center gap-3">
-              <div
-                className="h-3 w-8 rounded-sm"
-                style={{ backgroundColor: item.color }}
-              />
-              <span className="text-sm text-slate-700">{item.name}</span>
-            </div>
-          ))}
+          {materials
+            .filter((item) => item.name !== "All")
+            .map((item) => (
+              <div key={item.name} className="flex items-center gap-3">
+                <div
+                  className="h-3 w-8 rounded-sm"
+                  style={{ backgroundColor: item.color || "#64748b" }}
+                />
+                <span className="text-sm text-slate-700">{item.name}</span>
+              </div>
+            ))}
         </div>
       </div>
     </div>
