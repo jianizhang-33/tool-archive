@@ -17,21 +17,33 @@ export function formatYear(year: number) {
 }
 
 export function toEmbedUrl(url: string) {
-  const trimmed = url.trim();
-  if (!trimmed) return "";
+  if (!url) return "";
 
-  if (trimmed.includes("youtube.com/embed/")) return trimmed;
+  try {
+    const clean = url.split("?")[0];
 
-  if (trimmed.includes("watch?v=")) {
-    return trimmed.replace("watch?v=", "embed/");
+    // shorts
+    const shortsMatch = clean.match(/shorts\/([^\/]+)/);
+    if (shortsMatch) {
+      return `https://www.youtube.com/embed/${shortsMatch[1]}`;
+    }
+
+    // watch?v=
+    const watchMatch = url.match(/[?&]v=([^&]+)/);
+    if (watchMatch) {
+      return `https://www.youtube.com/embed/${watchMatch[1]}`;
+    }
+
+    // youtu.be
+    const shortMatch = url.match(/youtu\.be\/([^?]+)/);
+    if (shortMatch) {
+      return `https://www.youtube.com/embed/${shortMatch[1]}`;
+    }
+
+    return url;
+  } catch {
+    return url;
   }
-
-  const shortMatch = trimmed.match(/youtu\.be\/([a-zA-Z0-9_-]+)/);
-  if (shortMatch) {
-    return `https://www.youtube.com/embed/${shortMatch[1]}`;
-  }
-
-  return trimmed;
 }
 
 function isNonEmptyString(value: unknown): value is string {
